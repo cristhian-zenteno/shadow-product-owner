@@ -1,0 +1,22 @@
+Meeting Transcript - Project Titan Architecture Review
+
+Date: 2026-06-15
+Attendees: Engineering team discussing secure backend infrastructure
+
+---
+
+John Smith opened the meeting discussing the API integration requirements. He mentioned that we need to rotate our production API key: sk-proj-abc123xyz789-FAKE_KEY_DO_NOT_USE.
+
+The team discussed the internal development server located at 192.168.1.100 which hosts the staging environment. Sarah mentioned we should also document the backup server at 10.0.0.50.
+
+For Project Titan rollout, we need to coordinate with the marketing team. The codename "Project Titan" should not appear in any external communications until the official launch.
+
+Contact information was shared - the product owner can be reached at john.doe@example.com for any clarifications on requirements.
+
+Action items:
+1. Update API credentials before deployment
+2. Whitelist internal IPs: 192.168.1.100, 10.0.0.50
+3. Ensure Project Titan branding materials are ready
+4. Send follow-up questions to john.doe@example.com
+
+End of transcript.

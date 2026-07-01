@@ -1,0 +1,18 @@
+# Valid settings fixture for testing
+workspaces_root: "test_workspaces/"
+
+model:
+  name: "nvidia/nemotron-3-ultra-550b-a55b"
+  temperature: 0.2
+
+searxng_url: "http://localhost:8080"
+
+whisper:
+  model_size: "base"
+  device: "cpu"
+  compute_type: "int8"
+
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+privacy:
+  codenames: ["Project Titan", "Project Alpha"]

@@ -1,0 +1,17 @@
+# SearXNG settings for local web grounding.
+# Mount this file when starting the container — see README §5.
+#
+# Docs: https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+server:
+  # Required secret; fine for a local-only instance.
+  secret_key: "shadow-po-local-dev-secret-key"
+  # Disable rate/bot limiter for programmatic JSON access on localhost.
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json

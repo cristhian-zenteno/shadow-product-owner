@@ -1,0 +1,18 @@
+# Core dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pydantic>=2.0.0
+pyyaml>=6.0.0
+
+# Will be added as components are built:
+# faster-whisper
+# streamlit
+# langchain-core
+# langchain-nvidia-ai-endpoints
+# sentence-transformers
+# chromadb
+# presidio-analyzer
+# presidio-anonymizer
+# markitdown
+# pydantic>=2.0.0
+# python-dotenv

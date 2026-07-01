@@ -1,0 +1,12 @@
+# Local SearXNG instance for Shadow PO web grounding.
+# Start:  docker compose -f docker-compose.searxng.yml up -d
+# Stop:   docker compose -f docker-compose.searxng.yml down
+
+services:
+  searxng:
+    image: searxng/searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped

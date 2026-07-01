@@ -1,0 +1,27 @@
+# Shadow PO Application Settings
+# This is the main configuration file for the Shadow PO application.
+# All settings must be present for the application to start.
+
+# Root directory for per-feature workspaces
+workspaces_root: "workspaces/"
+
+# LLM model configuration
+model:
+  name: "nvidia/nemotron-3-ultra-550b-a55b"  # NVIDIA NIM free-tier model
+  temperature: 0.2  # Lower temperature for more deterministic outputs
+
+# Local SearXNG instance for web grounding
+searxng_url: "http://localhost:8080"
+
+# Whisper transcription settings
+whisper:
+  model_size: "base"  # Options: tiny, base, small, medium, large-v3
+  device: "cpu"       # Options: cpu, cuda
+  compute_type: "int8"  # Options: int8, float16, float32
+
+# Local embedding model for document retrieval
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+# Privacy configuration (optional)
+privacy:
+  codenames: []  # Add custom project codenames to redact (e.g., ["Project Titan", "Project Alpha"])
