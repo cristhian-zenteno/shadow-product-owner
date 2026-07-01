@@ -82,6 +82,49 @@ def test_get_llm_with_key():
                 assert result == "test-key-123"
 
 
+def test_get_llm_passes_timeout():
+    """get_llm() forwards the timeout to ChatNVIDIA."""
+    mock_llm_class = MagicMock()
+    mock_instance = MagicMock()
+    mock_llm_class.return_value = mock_instance
+
+    with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-key-123"}):
+        with patch.dict(
+            "sys.modules",
+            {"langchain_nvidia_ai_endpoints": MagicMock(ChatNVIDIA=mock_llm_class)},
+        ):
+            pipeline.get_llm("nvidia/test-model", timeout=300)
+
+    mock_llm_class.assert_called_once_with(
+        model="nvidia/test-model",
+        api_key="test-key-123",
+        temperature=0.2,
+        timeout=300,
+    )
+
+
+def test_get_llm_passes_max_completion_tokens():
+    """get_llm() forwards max_completion_tokens to ChatNVIDIA."""
+    mock_llm_class = MagicMock()
+    mock_instance = MagicMock()
+    mock_llm_class.return_value = mock_instance
+
+    with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-key-123"}):
+        with patch.dict(
+            "sys.modules",
+            {"langchain_nvidia_ai_endpoints": MagicMock(ChatNVIDIA=mock_llm_class)},
+        ):
+            pipeline.get_llm("nvidia/test-model", max_completion_tokens=16384)
+
+    mock_llm_class.assert_called_once_with(
+        model="nvidia/test-model",
+        api_key="test-key-123",
+        temperature=0.2,
+        timeout=60,
+        max_completion_tokens=16384,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task F-2: ShadowPOAnswer schema
 # ---------------------------------------------------------------------------
@@ -289,6 +332,171 @@ def test_ungrounded_disclosure(tmp_path):
            "connection" in result.grounding_note.lower(), (
         f"grounding_note must explain why grounding failed, got: {result.grounding_note}"
     )
+
+
+def test_prompt_only_includes_artefacts_when_explicitly_requested(tmp_path):
+    """
+    Acceptance (SPECIFY.md §8): the chat prompt must not encourage the model
+    to include Gherkin/diagrams unless the developer explicitly asked.
+    """
+    from shadow_po import workspace as ws
+
+    feature_ws = ws.create_workspace("prompt-artefacts", workspaces_root=tmp_path)
+
+    captured_prompts = []
+
+    def capturing_invoke(prompt):
+        captured_prompts.append(prompt)
+        return ShadowPOAnswer(answer="Answer.")
+
+    mock_llm = MagicMock()
+    structured = MagicMock()
+    structured.invoke.side_effect = capturing_invoke
+    mock_llm.with_structured_output.return_value = structured
+
+    with patch("shadow_po.pipeline.get_llm", return_value=mock_llm), \
+         patch("shadow_po.knowledge_base.retrieve", return_value=[]), \
+         patch("shadow_po.web_grounding.search_web", return_value=[]):
+
+        pipeline.answer_question(
+            workspace_path=feature_ws,
+            question="What does the spec say about the cancellation policy?",
+        )
+
+    prompt = captured_prompts[0].lower()
+    assert "would help" not in prompt
+    assert "explicitly" in prompt
+    assert "leave both fields null" in prompt
+
+
+def test_gherkin_and_diagram_stripped_for_plain_question(tmp_path):
+    """
+    When the developer asks an ordinary question, any Gherkin/diagram the
+    model returns must be stripped before the answer reaches the UI.
+    """
+    from shadow_po import workspace as ws
+
+    feature_ws = ws.create_workspace("strip-artefacts", workspaces_root=tmp_path)
+
+    mock_answer = ShadowPOAnswer(
+        answer="The cancellation policy allows refunds within 30 days.",
+        gherkin="Given a customer\nWhen they cancel\nThen they get a refund",
+        diagram="graph TD\n  A[Cancel] --> B[Refund]",
+    )
+
+    mock_llm = MagicMock()
+    structured = MagicMock()
+    structured.invoke.return_value = mock_answer
+    mock_llm.with_structured_output.return_value = structured
+
+    with patch("shadow_po.pipeline.get_llm", return_value=mock_llm), \
+         patch("shadow_po.knowledge_base.retrieve", return_value=["doc chunk"]), \
+         patch("shadow_po.web_grounding.search_web", return_value=[]):
+
+        result = pipeline.answer_question(
+            workspace_path=feature_ws,
+            question="What does the spec say about the cancellation policy?",
+        )
+
+    assert result.gherkin is None
+    assert result.diagram is None
+
+
+def test_gherkin_kept_when_explicitly_requested(tmp_path):
+    """Gherkin is preserved when the developer explicitly asks for a scenario."""
+    from shadow_po import workspace as ws
+
+    feature_ws = ws.create_workspace("keep-gherkin", workspaces_root=tmp_path)
+
+    gherkin_text = "Given a registered user\nWhen they checkout\nThen order is placed"
+    mock_answer = ShadowPOAnswer(
+        answer="Here is the happy-path scenario.",
+        gherkin=gherkin_text,
+    )
+
+    mock_llm = MagicMock()
+    structured = MagicMock()
+    structured.invoke.return_value = mock_answer
+    mock_llm.with_structured_output.return_value = structured
+
+    with patch("shadow_po.pipeline.get_llm", return_value=mock_llm), \
+         patch("shadow_po.knowledge_base.retrieve", return_value=["doc chunk"]), \
+         patch("shadow_po.web_grounding.search_web", return_value=[]):
+
+        result = pipeline.answer_question(
+            workspace_path=feature_ws,
+            question="Can you write a Gherkin scenario for the checkout flow?",
+        )
+
+    assert result.gherkin == gherkin_text
+    assert result.diagram is None
+
+
+def test_diagram_kept_when_explicitly_requested(tmp_path):
+    """Diagram is preserved when the developer explicitly asks for one."""
+    from shadow_po import workspace as ws
+
+    feature_ws = ws.create_workspace("keep-diagram", workspaces_root=tmp_path)
+
+    diagram_text = "graph TD\n  A[Cart] --> B[Checkout]"
+    mock_answer = ShadowPOAnswer(
+        answer="Here is the checkout flow.",
+        diagram=diagram_text,
+    )
+
+    mock_llm = MagicMock()
+    structured = MagicMock()
+    structured.invoke.return_value = mock_answer
+    mock_llm.with_structured_output.return_value = structured
+
+    with patch("shadow_po.pipeline.get_llm", return_value=mock_llm), \
+         patch("shadow_po.knowledge_base.retrieve", return_value=["doc chunk"]), \
+         patch("shadow_po.web_grounding.search_web", return_value=[]):
+
+        result = pipeline.answer_question(
+            workspace_path=feature_ws,
+            question="Show me a Mermaid diagram of the checkout flow.",
+        )
+
+    assert result.diagram == diagram_text
+    assert result.gherkin is None
+
+
+def test_diagram_extracted_from_answer_when_model_embeds_it(tmp_path):
+    """Sequence diagram text in answer is moved to diagram and normalized."""
+    from shadow_po import workspace as ws
+
+    feature_ws = ws.create_workspace("extract-diagram", workspaces_root=tmp_path)
+
+    embedded = (
+        "User->>UI: Click verify\n"
+        "UI->>Svc: POST /verify\n"
+        "Note right of Svc: Active coverage &\n"
+        "visits remaining > 0"
+    )
+    mock_answer = ShadowPOAnswer(
+        answer=f"Here is the flow.\n\n{embedded}",
+        diagram=None,
+    )
+
+    mock_llm = MagicMock()
+    structured = MagicMock()
+    structured.invoke.return_value = mock_answer
+    mock_llm.with_structured_output.return_value = structured
+
+    with patch("shadow_po.pipeline.get_llm", return_value=mock_llm), \
+         patch("shadow_po.knowledge_base.retrieve", return_value=["doc chunk"]), \
+         patch("shadow_po.web_grounding.search_web", return_value=[]):
+
+        result = pipeline.answer_question(
+            workspace_path=feature_ws,
+            question="Draw a sequence diagram for eligibility verification.",
+        )
+
+    assert result.answer == "Here is the flow."
+    assert result.diagram is not None
+    assert result.diagram.startswith("sequenceDiagram\n")
+    assert "Active coverage and" in result.diagram
 
 
 def test_grounding_note_in_prompt_when_unavailable(tmp_path):

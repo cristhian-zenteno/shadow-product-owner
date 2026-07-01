@@ -32,6 +32,29 @@ logger = logging.getLogger(__name__)
 # should not trigger a (slow) search on every turn.
 import re
 
+_GHERKIN_PATTERNS = [
+    re.compile(r"\bgherkin\b", re.I),
+    re.compile(r"\bbdd\b", re.I),
+    re.compile(r"\b(write|show|give|create|provide|draft).{0,40}\bscenario", re.I),
+    re.compile(r"\bscenario.{0,20}\b(gherkin|bdd|format)\b", re.I),
+    re.compile(r"\bin (gherkin|bdd)\b", re.I),
+    re.compile(r"\bas (a )?(gherkin|bdd)\b", re.I),
+]
+
+_DIAGRAM_PATTERNS = [
+    re.compile(r"\bdiagram\b", re.I),
+    re.compile(r"\bflowchart\b", re.I),
+    re.compile(r"\bflow chart\b", re.I),
+    re.compile(r"\bmermaid\b", re.I),
+    re.compile(r"\bsequence diagram\b", re.I),
+    re.compile(
+        r"\b(write|show|give|create|provide|draw|sketch).{0,40}\b"
+        r"(diagram|flowchart|flow chart)\b",
+        re.I,
+    ),
+    re.compile(r"\bvisuali[sz]e\b", re.I),
+]
+
 _GROUNDING_PATTERNS = [
     re.compile(r"\bindustry standard", re.I),
     re.compile(r"\bbest practices?\b", re.I),
@@ -56,6 +79,16 @@ _GROUNDING_PATTERNS = [
 ]
 
 
+def _requests_gherkin(question: str) -> bool:
+    """True when the developer explicitly asked for a Gherkin scenario."""
+    return any(p.search(question) for p in _GHERKIN_PATTERNS)
+
+
+def _requests_diagram(question: str) -> bool:
+    """True when the developer explicitly asked for a Mermaid diagram."""
+    return any(p.search(question) for p in _DIAGRAM_PATTERNS)
+
+
 def _needs_grounding(question: str) -> bool:
     """
     Heuristic: does this question plausibly need current public information
@@ -71,7 +104,11 @@ def _needs_grounding(question: str) -> bool:
 # LLM factory
 # ---------------------------------------------------------------------------
 
-def get_llm(model_name: str = "nvidia/nemotron-ultra-253b-v1"):
+def get_llm(
+    model_name: str = "nvidia/nemotron-ultra-253b-v1",
+    timeout: float = 60,
+    max_completion_tokens: Optional[int] = None,
+):
     """
     Return a configured ChatNVIDIA instance.
 
@@ -80,6 +117,8 @@ def get_llm(model_name: str = "nvidia/nemotron-ultra-253b-v1"):
 
     Args:
         model_name: NVIDIA NIM model identifier (default: nemotron-ultra-253b)
+        timeout:    HTTP read timeout in seconds (default: 60)
+        max_completion_tokens: Cap on generated tokens (default: ChatNVIDIA's 1024)
 
     Returns:
         ChatNVIDIA instance ready for structured-output chaining
@@ -102,13 +141,26 @@ def get_llm(model_name: str = "nvidia/nemotron-ultra-253b-v1"):
             "Run: uv add langchain-nvidia-ai-endpoints"
         ) from exc
 
-    logger.info(f"Initialising ChatNVIDIA with model: {model_name}")
+    if max_completion_tokens is not None:
+        logger.info(
+            f"Initialising ChatNVIDIA with model: {model_name} "
+            f"(timeout={timeout}s, max_completion_tokens={max_completion_tokens})"
+        )
+    else:
+        logger.info(
+            f"Initialising ChatNVIDIA with model: {model_name} (timeout={timeout}s)"
+        )
 
-    return ChatNVIDIA(
-        model=model_name,
-        api_key=api_key,
-        temperature=0.2,
-    )
+    llm_kwargs = {
+        "model": model_name,
+        "api_key": api_key,
+        "temperature": 0.2,
+        "timeout": timeout,
+    }
+    if max_completion_tokens is not None:
+        llm_kwargs["max_completion_tokens"] = max_completion_tokens
+
+    return ChatNVIDIA(**llm_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +174,7 @@ def answer_question(
     model_name: str = "nvidia/nemotron-ultra-253b-v1",
     k: int = 5,
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    timeout: float = 60,
 ) -> ShadowPOAnswer:
     """
     Answer a developer question by assembling:
@@ -137,6 +190,7 @@ def answer_question(
         model_name:     NVIDIA NIM model identifier
         k:              Number of RAG chunks to retrieve
         embedding_model: sentence-transformers model used at indexing time
+        timeout:        HTTP read timeout in seconds for the LLM call
 
     Returns:
         ShadowPOAnswer (schema-validated Pydantic model)
@@ -199,15 +253,19 @@ def answer_question(
         logger.info("Question answerable from local docs — skipping web grounding")
 
     # 4. Assemble the prompt
+    wants_gherkin = _requests_gherkin(scrubbed_question)
+    wants_diagram = _requests_diagram(scrubbed_question)
     prompt = _build_prompt(
         question=scrubbed_question,
         chunks=chunks,
         web_snippets=web_snippets,
         grounding_note=grounding_note,
+        wants_gherkin=wants_gherkin,
+        wants_diagram=wants_diagram,
     )
 
     # 5. Call the LLM with structured output
-    llm = get_llm(model_name=model_name)
+    llm = get_llm(model_name=model_name, timeout=timeout)
     structured_llm = llm.with_structured_output(ShadowPOAnswer)
 
     logger.info("Calling NVIDIA NIM LLM")
@@ -218,6 +276,22 @@ def answer_question(
     raw_answer.grounded = grounded
     if grounding_note:
         raw_answer.grounding_note = grounding_note
+
+    # Per SPECIFY.md §8: Gherkin/diagram only when explicitly requested
+    if not wants_gherkin:
+        raw_answer.gherkin = None
+    if wants_diagram:
+        from shadow_po.mermaid_format import normalize_mermaid_source, split_answer_and_diagram
+
+        if not raw_answer.diagram:
+            cleaned_answer, extracted = split_answer_and_diagram(raw_answer.answer)
+            if extracted:
+                raw_answer.answer = cleaned_answer
+                raw_answer.diagram = extracted
+        if raw_answer.diagram:
+            raw_answer.diagram = normalize_mermaid_source(raw_answer.diagram)
+    else:
+        raw_answer.diagram = None
 
     logger.info("LLM call complete — returning schema-validated answer")
 
@@ -233,6 +307,8 @@ def _build_prompt(
     chunks: List[str],
     web_snippets: List[str],
     grounding_note: Optional[str],
+    wants_gherkin: bool = False,
+    wants_diagram: bool = False,
 ) -> str:
     """
     Assemble the full prompt sent to the LLM.
@@ -250,9 +326,32 @@ def _build_prompt(
         "You are Shadow PO, an expert AI assistant helping software engineers "
         "understand ambiguous product requirements.\n"
         "Answer the developer's question clearly and concisely, grounded in the "
-        "provided context. If Gherkin scenarios or a Mermaid diagram would help, "
-        "include them.\n"
+        "provided context.\n\n"
+        "Only populate the `gherkin` and `diagram` fields when the developer "
+        "explicitly asks for a Gherkin scenario or a Mermaid diagram (e.g. "
+        "'show me a diagram', 'write a Gherkin scenario'). For ordinary "
+        "questions, leave both fields null and answer in plain language only. "
+        "Do not include Gherkin or diagrams just because they might be helpful.\n"
     ]
+
+    if wants_diagram:
+        sections.append(
+            "## Diagram requirements\n"
+            "The developer asked for a Mermaid diagram. Put the full diagram "
+            "source in the `diagram` field only — not in `answer`.\n"
+            "- Start with a valid declaration: `sequenceDiagram`, "
+            "`flowchart TD`, etc.\n"
+            "- For sequence diagrams, declare arrows as `A->>B: message`.\n"
+            "- Each `Note` must be a single line; use `and` instead of `&`.\n"
+            "- Avoid `>` comparisons inside Note text (write 'greater than 0').\n"
+            "- Do not wrap the diagram in markdown code fences.\n"
+        )
+
+    if wants_gherkin:
+        sections.append(
+            "## Gherkin requirements\n"
+            "Put the full scenario in the `gherkin` field only — not in `answer`.\n"
+        )
 
     if chunks:
         sections.append("## Relevant workspace documents\n")

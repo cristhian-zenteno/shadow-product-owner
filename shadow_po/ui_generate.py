@@ -63,6 +63,8 @@ def _run_generate(workspace_path: Path) -> None:
             output_path = gd.generate_docs(
                 workspace_path=workspace_path,
                 model_name=settings.model.name,
+                timeout=settings.model.generate_docs_timeout,
+                max_completion_tokens=settings.model.generate_docs_max_completion_tokens,
             )
             st.success(f"✅ Docs generated: `{output_path}`")
             _preview_run(output_path)
@@ -91,4 +93,9 @@ def _preview_run(run_dir: Path) -> None:
         if file_path.exists():
             content = file_path.read_text(encoding="utf-8")
             with st.expander(f"{label} — `{filename}`"):
-                st.markdown(content)
+                if filename == "diagram.md":
+                    from shadow_po.ui_chat import _render_message_content
+
+                    _render_message_content(content)
+                else:
+                    st.markdown(content)

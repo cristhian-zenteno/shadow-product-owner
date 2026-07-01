@@ -6,9 +6,78 @@ Saves each turn via chat_history.save_turn() and detects answered questions
 via answered_questions.detect_answered_question().
 """
 
+import re
 import streamlit as st
 from pathlib import Path
 import uuid
+
+from shadow_po.mermaid_format import (
+    format_mermaid_block,
+    looks_like_sequence_diagram,
+    normalize_mermaid_source,
+    strip_fenced_code,
+)
+
+_MERMAID_FENCE_RE = re.compile(
+    r"```mermaid\s*\n(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _format_assistant_content(answer_obj) -> str:
+    """Build the assistant message stored in chat history."""
+    assistant_text = answer_obj.answer
+    if answer_obj.gherkin:
+        gherkin_source = strip_fenced_code(answer_obj.gherkin)
+        assistant_text += f"\n\n**Gherkin:**\n```gherkin\n{gherkin_source}\n```"
+    if answer_obj.diagram:
+        assistant_text += f"\n\n**Diagram:**\n{format_mermaid_block(answer_obj.diagram)}"
+    return assistant_text
+
+
+def _render_mermaid_block(source: str) -> None:
+    """Render a diagram preview plus a copyable source block."""
+    normalized = normalize_mermaid_source(source)
+    try:
+        st.mermaid(normalized)
+    except Exception:
+        pass
+    st.code(normalized, language="mermaid")
+
+
+def _render_message_content(content: str) -> None:
+    """
+    Render chat message content.
+
+    Mermaid diagrams are shown as copyable code blocks instead of being
+    rendered inline, so developers can paste them into external tools.
+    """
+    if _MERMAID_FENCE_RE.search(content):
+        last_end = 0
+        for match in _MERMAID_FENCE_RE.finditer(content):
+            before = content[last_end : match.start()]
+            if before.strip():
+                st.markdown(before)
+            _render_mermaid_block(match.group(1).strip())
+            last_end = match.end()
+        remaining = content[last_end:]
+        if remaining.strip():
+            st.markdown(remaining)
+        return
+
+    if "**Diagram:**" in content:
+        before, _, diagram_part = content.partition("**Diagram:**")
+        if before.strip():
+            st.markdown(before)
+        st.markdown("**Diagram:**")
+        _render_mermaid_block(strip_fenced_code(diagram_part))
+        return
+
+    if looks_like_sequence_diagram(content):
+        _render_mermaid_block(content)
+        return
+
+    st.markdown(content)
 
 
 def render_chat_panel(workspace_path: Path) -> None:
@@ -80,7 +149,7 @@ def render_chat_panel(workspace_path: Path) -> None:
             role = msg["role"]
             content = msg["content"]
             with st.chat_message(role):
-                st.markdown(content)
+                _render_message_content(content)
 
         pending_question = st.session_state.get(pending_key)
         if pending_question:
@@ -126,11 +195,7 @@ def _handle_assistant_turn(
     if answer_obj is None:
         return
 
-    assistant_text = answer_obj.answer
-    if answer_obj.gherkin:
-        assistant_text += f"\n\n**Gherkin:**\n```gherkin\n{answer_obj.gherkin}\n```"
-    if answer_obj.diagram:
-        assistant_text += f"\n\n**Diagram:**\n{answer_obj.diagram}"
+    assistant_text = _format_assistant_content(answer_obj)
 
     chat_history.save_turn(
         workspace_path, conversation_id, "assistant", assistant_text
@@ -172,6 +237,7 @@ def _call_pipeline(workspace_path: Path, question: str):
             question=question,
             searxng_url=settings.searxng_url,
             model_name=settings.model.name,
+            timeout=settings.model.timeout,
         )
     except RuntimeError as exc:
         if "NVIDIA_API_KEY" in str(exc):

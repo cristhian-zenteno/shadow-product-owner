@@ -150,3 +150,19 @@ def test_default_model_temperature():
     
     settings = Settings(**minimal_settings)
     assert settings.model.temperature == 0.2  # Default
+
+
+def test_default_model_timeouts():
+    """Test that LLM timeout settings have sensible defaults."""
+    minimal_settings = {
+        "workspaces_root": "workspaces/",
+        "model": {"name": "test-model"},
+        "searxng_url": "http://localhost:8080",
+        "whisper": {"model_size": "base"},
+        "embedding_model": "test-model",
+    }
+
+    settings = Settings(**minimal_settings)
+    assert settings.model.timeout == 60
+    assert settings.model.generate_docs_timeout == 300
+    assert settings.model.generate_docs_max_completion_tokens == 16384

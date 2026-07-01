@@ -9,6 +9,9 @@ workspaces_root: "workspaces/"
 model:
   name: "nvidia/nemotron-3-ultra-550b-a55b"  # NVIDIA NIM free-tier model
   temperature: 0.2  # Lower temperature for more deterministic outputs
+  timeout: 60  # HTTP read timeout (seconds) for chat and other LLM calls
+  generate_docs_timeout: 300  # Longer timeout for Generate docs (large structured output)
+  generate_docs_max_completion_tokens: 16384  # Room for four full markdown files in one JSON response
 
 # Local SearXNG instance for web grounding
 searxng_url: "http://localhost:8080"

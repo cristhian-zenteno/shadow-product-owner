@@ -15,7 +15,8 @@ class ShadowPOAnswer(BaseModel):
     Schema for a single chat answer from the LLM.
 
     Conversational, not a finished deliverable — it answers the current
-    question and may include supporting artefacts when relevant.
+    question and may include Gherkin or a diagram only when explicitly
+    requested (per SPECIFY.md §8).
 
     Fields:
         answer:   Plain-language response to the question (always present)
@@ -36,7 +37,12 @@ class ShadowPOAnswer(BaseModel):
     )
     diagram: Optional[str] = Field(
         default=None,
-        description="Mermaid diagram source if the question requested one",
+        description=(
+            "Mermaid.js source ONLY when the question requested a diagram. "
+            "No markdown fences. Must start with a diagram-type declaration "
+            "(e.g. sequenceDiagram, flowchart TD). Put ALL diagram content "
+            "here — never in the answer field."
+        ),
     )
     grounded: bool = Field(
         default=False,

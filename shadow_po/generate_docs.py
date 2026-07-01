@@ -17,6 +17,7 @@ from typing import Union, List, Optional
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 import logging
+import re
 
 from shadow_po.schemas import GeneratedDocs
 
@@ -24,10 +25,18 @@ logger = logging.getLogger(__name__)
 
 
 # Module-level alias so tests can patch 'shadow_po.generate_docs.get_llm'
-def get_llm(model_name: str = "nvidia/nemotron-ultra-253b-v1"):
+def get_llm(
+    model_name: str = "nvidia/nemotron-ultra-253b-v1",
+    timeout: float = 300,
+    max_completion_tokens: Optional[int] = None,
+):
     """Thin wrapper around pipeline.get_llm — patchable at module level."""
     from shadow_po.pipeline import get_llm as _get_llm
-    return _get_llm(model_name)
+    return _get_llm(
+        model_name,
+        timeout=timeout,
+        max_completion_tokens=max_completion_tokens,
+    )
 
 # ---------------------------------------------------------------------------
 # Feature context container  (Task I-1)
@@ -266,6 +275,74 @@ def _filter_answered_questions(
 
 
 # ---------------------------------------------------------------------------
+# Markdown normalization (flattened LLM JSON strings → readable files)
+# ---------------------------------------------------------------------------
+
+def _is_well_formatted_markdown(text: str) -> bool:
+    """Return True when markdown already has real line breaks."""
+    if not text.strip():
+        return True
+    if "\n" in text and "  " not in text:
+        return True
+    newline_count = text.count("\n")
+    if newline_count >= 5:
+        return True
+    if newline_count >= 2 and len(text) / newline_count < 120:
+        return True
+    return False
+
+
+def normalize_markdown(text: str) -> str:
+    """
+    Restore line breaks in LLM markdown that was flattened into one line.
+
+    Structured JSON output sometimes omits ``\\n`` and uses double spaces
+    instead. Well-formatted content (already containing newlines) is left
+    unchanged.
+    """
+    if not text or not text.strip():
+        return text
+
+    text = text.replace("\\n", "\n").strip()
+
+    if _is_well_formatted_markdown(text):
+        return text if text.endswith("\n") else text + "\n"
+
+    # Fenced code blocks and headings
+    text = re.sub(r"\s+(?=```)", "\n\n", text)
+    text = re.sub(r"\s+(?=#{1,6}\s)", "\n\n", text)
+
+    # Numbered lists and Gherkin
+    text = re.sub(r"\s+(?=\d+\.\s)", "\n", text)
+    text = re.sub(
+        r"(?<!#)\s+(?=(?:Feature|Scenario|Background|Examples):)",
+        "\n\n",
+        text,
+    )
+    text = re.sub(r"\s+(?=(?:Given|When|Then|And|But)\s)", "\n", text)
+    text = re.sub(r"\s+(?=@\w)", "\n", text)
+
+    # Markdown tables
+    text = re.sub(r"\s+(?=\|)", "\n", text)
+
+    # Mermaid / sequence-diagram statements
+    text = re.sub(
+        r"\s+(?=(?:sequenceDiagram|flowchart|graph\s+(?:TD|LR|TB|RL|BT)|"
+        r"classDiagram|stateDiagram|erDiagram|autonumber|participant|actor|"
+        r"loop|alt|else|end|opt|par|rect)\b)",
+        "\n",
+        text,
+    )
+    text = re.sub(r"\s+(?=[\w][\w\s/]*(?:->>|->|-->>|--)\s)", "\n", text)
+
+    # Remaining paragraph breaks from double-space separators
+    text = re.sub(r"  +", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip() + "\n"
+
+
+# ---------------------------------------------------------------------------
 # I-4: Write timestamped output folder, never overwriting past runs
 # ---------------------------------------------------------------------------
 
@@ -273,6 +350,8 @@ def generate_docs(
     workspace_path: Union[str, Path],
     model_name: str = "nvidia/nemotron-ultra-253b-v1",
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    timeout: float = 300,
+    max_completion_tokens: int = 16384,
 ) -> Path:
     """
     Gather all feature context, call the LLM, and write four Markdown files
@@ -285,6 +364,8 @@ def generate_docs(
         workspace_path: Path to the feature workspace root
         model_name:     NVIDIA NIM model identifier
         embedding_model: sentence-transformers model (for any RAG needed)
+        timeout:        HTTP read timeout in seconds for the LLM call
+        max_completion_tokens: Token budget for the four-file structured response
 
     Returns:
         Path to the newly created timestamped output folder
@@ -307,7 +388,11 @@ def generate_docs(
 
     # Step 3: call the LLM with structured output
     logger.info("Calling LLM for document generation")
-    llm = get_llm(model_name=model_name)
+    llm = get_llm(
+        model_name=model_name,
+        timeout=timeout,
+        max_completion_tokens=max_completion_tokens,
+    )
     structured_llm = llm.with_structured_output(GeneratedDocs)
 
     try:
@@ -340,10 +425,18 @@ def generate_docs(
     try:
         output_dir.mkdir(parents=True, exist_ok=False)
 
-        (output_dir / "business-rules.md").write_text(result.business_rules, encoding="utf-8")
-        (output_dir / "scenarios.md").write_text(result.scenarios, encoding="utf-8")
-        (output_dir / "diagram.md").write_text(result.diagram, encoding="utf-8")
-        (output_dir / "open-questions.md").write_text(filtered_open_questions, encoding="utf-8")
+        (output_dir / "business-rules.md").write_text(
+            normalize_markdown(result.business_rules), encoding="utf-8"
+        )
+        (output_dir / "scenarios.md").write_text(
+            normalize_markdown(result.scenarios), encoding="utf-8"
+        )
+        (output_dir / "diagram.md").write_text(
+            normalize_markdown(result.diagram), encoding="utf-8"
+        )
+        (output_dir / "open-questions.md").write_text(
+            normalize_markdown(filtered_open_questions), encoding="utf-8"
+        )
 
         logger.info(
             f"Generated docs written to: {output_dir}\n"

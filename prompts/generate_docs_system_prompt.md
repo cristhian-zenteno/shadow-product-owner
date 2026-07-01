@@ -15,6 +15,8 @@ Produce your output as a structured JSON object with exactly these four keys:
 
 Do not produce any text outside the JSON object. The code that saves your output to disk does no re-formatting — your output is written directly as-is, so it must be correct Markdown from the start.
 
+**Critical — newlines in JSON string values:** Each markdown field must contain real line-break characters (`\n` in JSON), not a single flattened line. Never replace line breaks with double spaces. Headings, list items, table rows, Gherkin steps, and Mermaid statements must each be on their own line. A one-line markdown string is invalid output.
+
 ## What each file must contain
 
 ### business-rules.md

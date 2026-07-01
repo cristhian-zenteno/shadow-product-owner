@@ -23,6 +23,21 @@ class ModelConfig(BaseModel):
     """Configuration for LLM model."""
     name: str = Field(..., description="Model identifier (e.g., nvidia/nemotron-3-ultra-550b-a55b)")
     temperature: float = Field(default=0.2, description="Model temperature for generation")
+    timeout: float = Field(
+        default=60,
+        ge=0,
+        description="HTTP read timeout in seconds for chat and other LLM calls",
+    )
+    generate_docs_timeout: float = Field(
+        default=300,
+        ge=0,
+        description="HTTP read timeout in seconds for Generate docs (large structured output)",
+    )
+    generate_docs_max_completion_tokens: int = Field(
+        default=16384,
+        gt=0,
+        description="Max tokens for Generate docs structured output (four markdown files)",
+    )
 
 
 class PrivacyConfig(BaseModel):

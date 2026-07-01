@@ -287,6 +287,105 @@ def test_generate_docs_llm_failure_writes_no_files(populated_workspace):
     )
 
 
+def test_generate_docs_passes_timeout_to_get_llm(populated_workspace):
+    """generate_docs() forwards the timeout to get_llm()."""
+    with patch("shadow_po.generate_docs.get_llm", return_value=_mock_llm(SAMPLE_DOCS)) as mock_get_llm:
+        gd.generate_docs(populated_workspace, timeout=420)
+
+    mock_get_llm.assert_called_once()
+    assert mock_get_llm.call_args.kwargs["timeout"] == 420
+
+
+def test_generate_docs_passes_max_completion_tokens_to_get_llm(populated_workspace):
+    """generate_docs() forwards max_completion_tokens to get_llm()."""
+    with patch("shadow_po.generate_docs.get_llm", return_value=_mock_llm(SAMPLE_DOCS)) as mock_get_llm:
+        gd.generate_docs(populated_workspace, max_completion_tokens=8192)
+
+    mock_get_llm.assert_called_once()
+    assert mock_get_llm.call_args.kwargs["max_completion_tokens"] == 8192
+
+
+# ---------------------------------------------------------------------------
+# Markdown normalization
+# ---------------------------------------------------------------------------
+
+FLATTENED_BUSINESS_RULES = (
+    "# Business Rules — Real-Time Insurance Eligibility Verification (PT-EMR)  "
+    "1. Feature Objective  The system automatically verifies patient insurance.  "
+    "2. PO Said → PO Meant Translation Table  "
+    "| PO Statement (from source docs) | Precise Engineering Implication |  "
+    "|-------------------------------|--------------------------------|  "
+    "| Users want real-time checks | System must call clearinghouse EDI 270 |"
+)
+
+FLATTENED_DIAGRAM = (
+    "# Diagram — Eligibility Flow  ```mermaid  sequenceDiagram  autonumber  "
+    "actor User as Front Desk  participant UI as Patient Profile  "
+    "User->>UI: Clicks Verify  UI->>Svc: POST /eligibility```"
+)
+
+FLATTENED_SCENARIOS = (
+    "# Scenarios — Eligibility  ## Feature: Real-Time Eligibility  "
+    "### Happy Path  @eligibility @happy-path  "
+    "Scenario: User verifies eligibility  "
+    "Given a patient with active insurance  When the user clicks Verify  "
+    "Then the status shows Green"
+)
+
+
+def test_normalize_markdown_leaves_well_formatted_unchanged():
+    """Content that already has newlines is not rewritten."""
+    original = SAMPLE_DOCS.business_rules
+    assert gd.normalize_markdown(original) == original + "\n"
+
+
+def test_normalize_markdown_restores_flattened_business_rules():
+    """Flattened single-line business rules get structural line breaks."""
+    result = gd.normalize_markdown(FLATTENED_BUSINESS_RULES)
+
+    assert result.count("\n") >= 4
+    assert "# Business Rules" in result
+    assert "\n1. Feature Objective" in result
+    assert "\n| PO Statement" in result
+
+
+def test_normalize_markdown_restores_flattened_diagram():
+    """Flattened Mermaid blocks get one statement per line."""
+    result = gd.normalize_markdown(FLATTENED_DIAGRAM)
+
+    assert "```mermaid" in result
+    assert "\nsequenceDiagram" in result
+    assert "\nparticipant UI" in result or "\nactor User" in result
+
+
+def test_normalize_markdown_restores_flattened_gherkin():
+    """Flattened Gherkin scenarios get step line breaks."""
+    result = gd.normalize_markdown(FLATTENED_SCENARIOS)
+
+    assert "\n## Feature:" in result
+    assert "\nScenario:" in result
+    assert "\nGiven a patient" in result
+    assert "\nWhen the user" in result
+    assert "\nThen the status" in result
+
+
+def test_generate_docs_normalizes_flattened_llm_output(populated_workspace):
+    """Flattened LLM markdown is normalized before writing to disk."""
+    flat_docs = GeneratedDocs(
+        business_rules=FLATTENED_BUSINESS_RULES,
+        scenarios=FLATTENED_SCENARIOS,
+        diagram=FLATTENED_DIAGRAM,
+        open_questions="1. What is the timeout?  2. How are retries handled?",
+    )
+
+    with patch("shadow_po.generate_docs.get_llm", return_value=_mock_llm(flat_docs)):
+        output_dir = gd.generate_docs(populated_workspace)
+
+    business_rules = (output_dir / "business-rules.md").read_text(encoding="utf-8")
+    assert business_rules.count("\n") >= 3
+    assert "  " not in business_rules or business_rules.count("  ") < 3
+
+
 def test_generate_docs_applies_answered_filter(populated_workspace):
     """
     The open-questions.md in the output excludes questions already recorded
